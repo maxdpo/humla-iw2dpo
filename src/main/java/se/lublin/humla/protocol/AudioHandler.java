@@ -59,6 +59,16 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
     public static final int FRAME_SIZE = SAMPLE_RATE/100;
     public static final int MAX_BUFFER_SIZE = 960;
 
+    /**
+     * "Roger beep": a short tone transmitted to the channel when the talk (PTT) button is
+     * released, so listeners using half-duplex devices (e.g. POC radios) know the channel is
+     * free again. Requested by IW2DPO.
+     */
+    private static final int RELEASE_BEEP_FREQUENCY_HZ = 1500;
+    private static final int RELEASE_BEEP_DURATION_MS = 150;
+    private static final double RELEASE_BEEP_AMPLITUDE = 0.4; // fraction of Short.MAX_VALUE
+    private static final int RELEASE_BEEP_FADE_MS = 10; // fade in/out to avoid clicks
+
     private final Context mContext;
     private final HumlaLogger mLogger;
     private final AudioManager mAudioManager;
@@ -87,6 +97,7 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
     private boolean mHalfDuplex;
     private boolean mPreprocessorEnabled;
     private String mEchoCancellationMethod;
+    private boolean mReleaseBeepEnabled;
     /** The last observed talking state. False if muted, or the input mode is not active. */
     private boolean mTalking;
 
@@ -98,6 +109,7 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
                         IInputMode inputMode, byte targetId, float amplitudeBoost,
                         boolean bluetoothEnabled, boolean halfDuplexEnabled,
                         boolean preprocessorEnabled, String echoCancellationMethod,
+                        boolean releaseBeepEnabled,
                         AudioEncodeListener encodeListener,
                         AudioOutput.AudioOutputListener outputListener) throws AudioInitializationException, NativeAudioException {
         mContext = context;
@@ -112,6 +124,7 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
         mHalfDuplex = halfDuplexEnabled;
         mPreprocessorEnabled = preprocessorEnabled;
         mEchoCancellationMethod = echoCancellationMethod;
+        mReleaseBeepEnabled = releaseBeepEnabled;
         mEncodeListener = encodeListener;
         mOutputListener = outputListener;
         mTalking = false;
@@ -323,6 +336,14 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
         return mHalfDuplex;
     }
 
+    /**
+     * Returns whether or not a "roger beep" is transmitted to the channel when the talk (PTT)
+     * button is released.
+     */
+    public boolean isReleaseBeepEnabled() {
+        return mReleaseBeepEnabled;
+    }
+
     public int getCurrentBandwidth() {
         return HumlaConnection.calculateAudioBandwidth(mBitrate, mFramesPerPacket);
     }
@@ -422,6 +443,11 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
                 // Terminate encoding when talking stops.
                 if (!talking && mEncoder != null) {
                     try {
+                        if (mReleaseBeepEnabled) {
+                            // Transmit a short "roger beep" so listeners know the channel is
+                            // now free (useful for half-duplex PTT operation).
+                            encodeReleaseBeep();
+                        }
                         mEncoder.terminate();
                     } catch (NativeAudioException e) {
                         e.printStackTrace();
@@ -481,6 +507,64 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
     }
 
     /**
+     * Synthesizes a short "roger beep" tone and feeds it through the current encoder, exactly
+     * as if it had been captured from the microphone. This is called right before the encoder
+     * is terminated when the talk (PTT) button is released, so that the tone is transmitted to
+     * the channel as the tail end of the transmission -- giving listeners on half-duplex
+     * devices (e.g. POC/PTT radios) a clear audible signal that the channel is now free.
+     *
+     * Must be called with {@link #mEncoderLock} held, and only while {@link #mEncoder} is
+     * non-null. Uses the same frame size/sample rate as real microphone frames so it is
+     * compatible with any codec/resampler/preprocessor chain currently configured.
+     */
+    private void encodeReleaseBeep() {
+        if (mEncoder == null) {
+            return;
+        }
+
+        final int sampleRate = mInput.getSampleRate();
+        final int frameSize = mInput.getFrameSize();
+        final int totalSamples = (RELEASE_BEEP_DURATION_MS * sampleRate) / 1000;
+        final int fadeSamples = Math.max(1, (RELEASE_BEEP_FADE_MS * sampleRate) / 1000);
+        final double amplitude = Short.MAX_VALUE * RELEASE_BEEP_AMPLITUDE;
+
+        short[] frame = new short[frameSize];
+        int sampleIndex = 0;
+        while (sampleIndex < totalSamples) {
+            int samplesInFrame = Math.min(frameSize, totalSamples - sampleIndex);
+            for (int i = 0; i < samplesInFrame; i++) {
+                double t = (double) sampleIndex / sampleRate;
+                double envelope = 1.0;
+                if (sampleIndex < fadeSamples) {
+                    envelope = (double) sampleIndex / fadeSamples;
+                } else if (sampleIndex > totalSamples - fadeSamples) {
+                    envelope = (double) (totalSamples - sampleIndex) / fadeSamples;
+                }
+                double sample = Math.sin(2.0 * Math.PI * RELEASE_BEEP_FREQUENCY_HZ * t);
+                frame[i] = (short) Math.round(sample * amplitude * envelope);
+                sampleIndex++;
+            }
+            // Zero-pad the final, possibly partial, frame.
+            for (int i = samplesInFrame; i < frameSize; i++) {
+                frame[i] = 0;
+            }
+
+            try {
+                mEncoder.encode(frame, frameSize);
+                mFrameCounter++;
+                // Drain the encoder as soon as a packet's worth of audio is ready, mirroring
+                // the behaviour of the normal microphone capture path.
+                if (mEncoder.isReady()) {
+                    sendEncodedAudio();
+                }
+            } catch (NativeAudioException e) {
+                Log.e(TAG, "Failed to encode release beep", e);
+                return;
+            }
+        }
+    }
+
+    /**
      * Fetches the buffered audio from the current encoder and sends it to the server.
      */
     private void sendEncodedAudio() {
@@ -525,6 +609,7 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
         private boolean mHalfDuplexEnabled;
         private boolean mPreprocessorEnabled;
         private String mEchoCancellationMethod;
+        private boolean mReleaseBeepEnabled = true;
         private IInputMode mInputMode;
         private AudioEncodeListener mEncodeListener;
         private AudioOutput.AudioOutputListener mTalkingListener;
@@ -589,6 +674,11 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
             return this;
         }
 
+        public Builder setReleaseBeepEnabled(boolean releaseBeepEnabled) {
+            mReleaseBeepEnabled = releaseBeepEnabled;
+            return this;
+        }
+
         public Builder setEncodeListener(AudioEncodeListener encodeListener) {
             mEncodeListener = encodeListener;
             return this;
@@ -612,7 +702,8 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
             AudioHandler handler = new AudioHandler(mContext, mLogger, mAudioStream, mAudioSource,
                     mInputSampleRate, mTargetBitrate, mTargetFramesPerPacket, mInputMode, targetId,
                     mAmplitudeBoost, mBluetoothEnabled, mHalfDuplexEnabled,
-                    mPreprocessorEnabled, mEchoCancellationMethod, mEncodeListener, mTalkingListener);
+                    mPreprocessorEnabled, mEchoCancellationMethod, mReleaseBeepEnabled,
+                    mEncodeListener, mTalkingListener);
             handler.initialize(self, maxBandwidth, codec);
             return handler;
         }
