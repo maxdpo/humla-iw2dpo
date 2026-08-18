@@ -66,7 +66,7 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
      */
     private static final int RELEASE_BEEP_FREQUENCY_HZ = 1500;
     private static final int RELEASE_BEEP_DURATION_MS = 150;
-    private static final double RELEASE_BEEP_AMPLITUDE = 0.4; // fraction of Short.MAX_VALUE
+    private static final int RELEASE_BEEP_VOLUME_DEFAULT = 40; // percent of full scale
     private static final int RELEASE_BEEP_FADE_MS = 10; // fade in/out to avoid clicks
 
     private final Context mContext;
@@ -98,6 +98,8 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
     private boolean mPreprocessorEnabled;
     private String mEchoCancellationMethod;
     private boolean mReleaseBeepEnabled;
+    /** Loudness of the "roger beep", as a percentage (0-100) of full scale. */
+    private int mReleaseBeepVolume;
     /** The last observed talking state. False if muted, or the input mode is not active. */
     private boolean mTalking;
 
@@ -109,7 +111,7 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
                         IInputMode inputMode, byte targetId, float amplitudeBoost,
                         boolean bluetoothEnabled, boolean halfDuplexEnabled,
                         boolean preprocessorEnabled, String echoCancellationMethod,
-                        boolean releaseBeepEnabled,
+                        boolean releaseBeepEnabled, int releaseBeepVolume,
                         AudioEncodeListener encodeListener,
                         AudioOutput.AudioOutputListener outputListener) throws AudioInitializationException, NativeAudioException {
         mContext = context;
@@ -125,6 +127,8 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
         mPreprocessorEnabled = preprocessorEnabled;
         mEchoCancellationMethod = echoCancellationMethod;
         mReleaseBeepEnabled = releaseBeepEnabled;
+        // Clamp to a sane range; 0 would be inaudible (use the enable toggle for that instead).
+        mReleaseBeepVolume = Math.max(1, Math.min(100, releaseBeepVolume));
         mEncodeListener = encodeListener;
         mOutputListener = outputListener;
         mTalking = false;
@@ -344,6 +348,14 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
         return mReleaseBeepEnabled;
     }
 
+    /**
+     * Returns the configured loudness of the "roger beep", as a percentage (0-100) of full
+     * scale.
+     */
+    public int getReleaseBeepVolume() {
+        return mReleaseBeepVolume;
+    }
+
     public int getCurrentBandwidth() {
         return HumlaConnection.calculateAudioBandwidth(mBitrate, mFramesPerPacket);
     }
@@ -526,7 +538,7 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
         final int frameSize = mInput.getFrameSize();
         final int totalSamples = (RELEASE_BEEP_DURATION_MS * sampleRate) / 1000;
         final int fadeSamples = Math.max(1, (RELEASE_BEEP_FADE_MS * sampleRate) / 1000);
-        final double amplitude = Short.MAX_VALUE * RELEASE_BEEP_AMPLITUDE;
+        final double amplitude = Short.MAX_VALUE * (mReleaseBeepVolume / 100.0);
 
         short[] frame = new short[frameSize];
         int sampleIndex = 0;
@@ -610,6 +622,7 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
         private boolean mPreprocessorEnabled;
         private String mEchoCancellationMethod;
         private boolean mReleaseBeepEnabled = true;
+        private int mReleaseBeepVolume = RELEASE_BEEP_VOLUME_DEFAULT;
         private IInputMode mInputMode;
         private AudioEncodeListener mEncodeListener;
         private AudioOutput.AudioOutputListener mTalkingListener;
@@ -679,6 +692,11 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
             return this;
         }
 
+        public Builder setReleaseBeepVolume(int releaseBeepVolume) {
+            mReleaseBeepVolume = releaseBeepVolume;
+            return this;
+        }
+
         public Builder setEncodeListener(AudioEncodeListener encodeListener) {
             mEncodeListener = encodeListener;
             return this;
@@ -702,7 +720,7 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
             AudioHandler handler = new AudioHandler(mContext, mLogger, mAudioStream, mAudioSource,
                     mInputSampleRate, mTargetBitrate, mTargetFramesPerPacket, mInputMode, targetId,
                     mAmplitudeBoost, mBluetoothEnabled, mHalfDuplexEnabled,
-                    mPreprocessorEnabled, mEchoCancellationMethod, mReleaseBeepEnabled,
+                    mPreprocessorEnabled, mEchoCancellationMethod, mReleaseBeepEnabled, mReleaseBeepVolume,
                     mEncodeListener, mTalkingListener);
             handler.initialize(self, maxBandwidth, codec);
             return handler;

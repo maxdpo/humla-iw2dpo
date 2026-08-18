@@ -121,6 +121,8 @@ public class HumlaService extends Service implements IHumlaService, IHumlaSessio
     public static final String EXTRAS_ECHO_CANCELLATION_METHOD = "echo_cancellation_method";
     /** Whether to transmit a short "roger beep" to the channel when PTT is released. */
     public static final String EXTRAS_RELEASE_BEEP = "release_beep_enabled";
+    /** Loudness of the "roger beep", as a percentage (0-100) of full scale. */
+    public static final String EXTRAS_RELEASE_BEEP_VOLUME = "release_beep_volume";
 
     // Service settings
     private Server mServer;
@@ -646,6 +648,9 @@ public class HumlaService extends Service implements IHumlaService, IHumlaSessio
         }
         if (extras.containsKey(EXTRAS_RELEASE_BEEP)) {
             mAudioBuilder.setReleaseBeepEnabled(extras.getBoolean(EXTRAS_RELEASE_BEEP));
+        }
+        if (extras.containsKey(EXTRAS_RELEASE_BEEP_VOLUME)) {
+            mAudioBuilder.setReleaseBeepVolume(extras.getInt(EXTRAS_RELEASE_BEEP_VOLUME));
         }
 
         // Reload audio subsystem if initialized
