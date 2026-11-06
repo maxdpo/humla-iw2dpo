@@ -63,8 +63,12 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
      * "Roger beep": a short tone transmitted to the channel when the talk (PTT) button is
      * released, so listeners using half-duplex devices (e.g. POC radios) know the channel is
      * free again. Requested by IW2DPO.
+     *
+     * The beep is the DTMF digit "0": the sum of a 941 Hz (low/row) and a
+     * 1336 Hz (high/column) sine wave, lasting 150 ms.
      */
-    private static final int RELEASE_BEEP_FREQUENCY_HZ = 1500;
+    private static final int RELEASE_BEEP_DTMF_LOW_HZ = 941;   // DTMF "0" row frequency
+    private static final int RELEASE_BEEP_DTMF_HIGH_HZ = 1336; // DTMF "0" column frequency
     private static final int RELEASE_BEEP_DURATION_MS = 150;
     private static final int RELEASE_BEEP_VOLUME_DEFAULT = 40; // percent of full scale
     private static final int RELEASE_BEEP_FADE_MS = 10; // fade in/out to avoid clicks
@@ -552,7 +556,10 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
                 } else if (sampleIndex > totalSamples - fadeSamples) {
                     envelope = (double) (totalSamples - sampleIndex) / fadeSamples;
                 }
-                double sample = Math.sin(2.0 * Math.PI * RELEASE_BEEP_FREQUENCY_HZ * t);
+                // DTMF "0": equal-level sum of both tones, halved so the peak never
+                // exceeds the configured amplitude (no clipping).
+                double sample = 0.5 * (Math.sin(2.0 * Math.PI * RELEASE_BEEP_DTMF_LOW_HZ * t)
+                        + Math.sin(2.0 * Math.PI * RELEASE_BEEP_DTMF_HIGH_HZ * t));
                 frame[i] = (short) Math.round(sample * amplitude * envelope);
                 sampleIndex++;
             }
