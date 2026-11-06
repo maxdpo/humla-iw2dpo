@@ -84,6 +84,12 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
     private int mSession;
     private HumlaUDPMessageType mCodec;
     private IEncoder mEncoder;
+    /**
+     * The bare codec encoder (Opus/CELT) wrapped by {@link #mEncoder}, without the Speex
+     * preprocessor (denoise/AGC/dereverb) or resampler. The roger beep is fed straight into this
+     * one: the preprocessor treats a steady tone as noise and attenuates/distorts it.
+     */
+    private IEncoder mCodecEncoder;
     private int mFrameCounter;
 
     private final int mAudioStream;
@@ -239,6 +245,7 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
             mEncoder.destroy();
             mEncoder = null;
         }
+        mCodecEncoder = null;
 
         if (codec == null) {
             Log.w(TAG, "setCodec(null) Input disabled.");
@@ -262,6 +269,8 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
                 Log.w(TAG, "Unsupported codec, input disabled.");
                 return;
         }
+
+        mCodecEncoder = encoder;
 
         if (mPreprocessorEnabled) {
             encoder = new PreprocessingEncoder(encoder, FRAME_SIZE, SAMPLE_RATE);
@@ -379,6 +388,7 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
                 mEncoder.destroy();
                 mEncoder = null;
             }
+            mCodecEncoder = null;
         }
         mInitialized = false;
         mBluetoothOn = false;
@@ -530,19 +540,24 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
      * devices (e.g. POC/PTT radios) a clear audible signal that the channel is now free.
      *
      * Must be called with {@link #mEncoderLock} held, and only while {@link #mEncoder} is
-     * non-null. Uses the same frame size/sample rate as real microphone frames so it is
-     * compatible with any codec/resampler/preprocessor chain currently configured.
+     * non-null. The tone is generated at the codec rate ({@link #SAMPLE_RATE}, {@link #FRAME_SIZE})
+     * and fed to {@link #mCodecEncoder}, bypassing the Speex preprocessor and resampler.
      */
     private void encodeReleaseBeep() {
-        if (mEncoder == null) {
+        if (mEncoder == null || mCodecEncoder == null) {
             return;
         }
 
-        final int sampleRate = mInput.getSampleRate();
-        final int frameSize = mInput.getFrameSize();
+        // Generate directly at the codec rate and feed the bare codec encoder, bypassing the
+        // Speex preprocessor (which would suppress/distort the tone) and the resampler.
+        final IEncoder encoder = mCodecEncoder;
+        final int sampleRate = SAMPLE_RATE;
+        final int frameSize = FRAME_SIZE;
         final int totalSamples = (RELEASE_BEEP_DURATION_MS * sampleRate) / 1000;
         final int fadeSamples = Math.max(1, (RELEASE_BEEP_FADE_MS * sampleRate) / 1000);
-        final double amplitude = Short.MAX_VALUE * (mReleaseBeepVolume / 100.0);
+        // Per-tone amplitude = volume / sqrt(2): the two DTMF tones together have the same
+        // loudness (RMS) as the former single tone at the same volume setting.
+        final double amplitude = Short.MAX_VALUE * (mReleaseBeepVolume / 100.0) / Math.sqrt(2.0);
 
         short[] frame = new short[frameSize];
         int sampleIndex = 0;
@@ -556,11 +571,12 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
                 } else if (sampleIndex > totalSamples - fadeSamples) {
                     envelope = (double) (totalSamples - sampleIndex) / fadeSamples;
                 }
-                // DTMF "0": equal-level sum of both tones, halved so the peak never
-                // exceeds the configured amplitude (no clipping).
-                double sample = 0.5 * (Math.sin(2.0 * Math.PI * RELEASE_BEEP_DTMF_LOW_HZ * t)
-                        + Math.sin(2.0 * Math.PI * RELEASE_BEEP_DTMF_HIGH_HZ * t));
-                frame[i] = (short) Math.round(sample * amplitude * envelope);
+                // DTMF "0": equal-level sum of both tones.
+                double sample = Math.sin(2.0 * Math.PI * RELEASE_BEEP_DTMF_LOW_HZ * t)
+                        + Math.sin(2.0 * Math.PI * RELEASE_BEEP_DTMF_HIGH_HZ * t);
+                long v = Math.round(sample * amplitude * envelope);
+                // Hard limit only matters for volume settings above ~70%.
+                frame[i] = (short) Math.max(Short.MIN_VALUE, Math.min(Short.MAX_VALUE, v));
                 sampleIndex++;
             }
             // Zero-pad the final, possibly partial, frame.
@@ -569,7 +585,7 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
             }
 
             try {
-                mEncoder.encode(frame, frameSize);
+                encoder.encode(frame, frameSize);
                 mFrameCounter++;
                 // Drain the encoder as soon as a packet's worth of audio is ready, mirroring
                 // the behaviour of the normal microphone capture path.
