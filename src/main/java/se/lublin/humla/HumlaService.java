@@ -123,6 +123,11 @@ public class HumlaService extends Service implements IHumlaService, IHumlaSessio
     public static final String EXTRAS_RELEASE_BEEP = "release_beep_enabled";
     /** Loudness of the "roger beep", as a percentage (0-100) of full scale. */
     public static final String EXTRAS_RELEASE_BEEP_VOLUME = "release_beep_volume";
+    /**
+     * Sound of the "roger beep": {@link se.lublin.humla.protocol.AudioHandler#RELEASE_BEEP_SOUND_DTMF}
+     * or {@link se.lublin.humla.protocol.AudioHandler#RELEASE_BEEP_SOUND_SINGLE_TONE}.
+     */
+    public static final String EXTRAS_RELEASE_BEEP_SOUND = "release_beep_sound";
 
     // Service settings
     private Server mServer;
@@ -651,6 +656,9 @@ public class HumlaService extends Service implements IHumlaService, IHumlaSessio
         }
         if (extras.containsKey(EXTRAS_RELEASE_BEEP_VOLUME)) {
             mAudioBuilder.setReleaseBeepVolume(extras.getInt(EXTRAS_RELEASE_BEEP_VOLUME));
+        }
+        if (extras.containsKey(EXTRAS_RELEASE_BEEP_SOUND)) {
+            mAudioBuilder.setReleaseBeepSound(extras.getString(EXTRAS_RELEASE_BEEP_SOUND));
         }
 
         // Reload audio subsystem if initialized

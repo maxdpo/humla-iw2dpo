@@ -69,7 +69,15 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
      */
     private static final int RELEASE_BEEP_DTMF_LOW_HZ = 941;   // DTMF "0" row frequency
     private static final int RELEASE_BEEP_DTMF_HIGH_HZ = 1336; // DTMF "0" column frequency
-    private static final int RELEASE_BEEP_DURATION_MS = 150;
+    private static final int RELEASE_BEEP_DURATION_MS = 150;   // DTMF duration
+
+    /** Alternative "single tone" roger beep: 600 Hz for 200 ms. */
+    private static final int RELEASE_BEEP_SINGLE_TONE_HZ = 600;
+    private static final int RELEASE_BEEP_SINGLE_TONE_DURATION_MS = 200;
+
+    /** Values accepted by {@link Builder#setReleaseBeepSound(String)}. */
+    public static final String RELEASE_BEEP_SOUND_DTMF = "dtmf";
+    public static final String RELEASE_BEEP_SOUND_SINGLE_TONE = "single_tone";
     private static final int RELEASE_BEEP_VOLUME_DEFAULT = 40; // percent of full scale
     private static final int RELEASE_BEEP_FADE_MS = 10; // fade in/out to avoid clicks
 
@@ -110,6 +118,8 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
     private boolean mReleaseBeepEnabled;
     /** Loudness of the "roger beep", as a percentage (0-100) of full scale. */
     private int mReleaseBeepVolume;
+    /** {@link #RELEASE_BEEP_SOUND_DTMF} or {@link #RELEASE_BEEP_SOUND_SINGLE_TONE}. */
+    private String mReleaseBeepSound;
     /** The last observed talking state. False if muted, or the input mode is not active. */
     private boolean mTalking;
 
@@ -121,7 +131,7 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
                         IInputMode inputMode, byte targetId, float amplitudeBoost,
                         boolean bluetoothEnabled, boolean halfDuplexEnabled,
                         boolean preprocessorEnabled, String echoCancellationMethod,
-                        boolean releaseBeepEnabled, int releaseBeepVolume,
+                        boolean releaseBeepEnabled, int releaseBeepVolume, String releaseBeepSound,
                         AudioEncodeListener encodeListener,
                         AudioOutput.AudioOutputListener outputListener) throws AudioInitializationException, NativeAudioException {
         mContext = context;
@@ -139,6 +149,8 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
         mReleaseBeepEnabled = releaseBeepEnabled;
         // Clamp to a sane range; 0 would be inaudible (use the enable toggle for that instead).
         mReleaseBeepVolume = Math.max(1, Math.min(100, releaseBeepVolume));
+        mReleaseBeepSound = RELEASE_BEEP_SOUND_SINGLE_TONE.equals(releaseBeepSound)
+                ? RELEASE_BEEP_SOUND_SINGLE_TONE : RELEASE_BEEP_SOUND_DTMF;
         mEncodeListener = encodeListener;
         mOutputListener = outputListener;
         mTalking = false;
@@ -369,6 +381,14 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
         return mReleaseBeepVolume;
     }
 
+    /**
+     * Returns the "roger beep" sound: {@link #RELEASE_BEEP_SOUND_DTMF} or
+     * {@link #RELEASE_BEEP_SOUND_SINGLE_TONE}.
+     */
+    public String getReleaseBeepSound() {
+        return mReleaseBeepSound;
+    }
+
     public int getCurrentBandwidth() {
         return HumlaConnection.calculateAudioBandwidth(mBitrate, mFramesPerPacket);
     }
@@ -553,11 +573,15 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
         final IEncoder encoder = mCodecEncoder;
         final int sampleRate = SAMPLE_RATE;
         final int frameSize = FRAME_SIZE;
-        final int totalSamples = (RELEASE_BEEP_DURATION_MS * sampleRate) / 1000;
+        final boolean singleTone = RELEASE_BEEP_SOUND_SINGLE_TONE.equals(mReleaseBeepSound);
+        final int durationMs = singleTone
+                ? RELEASE_BEEP_SINGLE_TONE_DURATION_MS : RELEASE_BEEP_DURATION_MS;
+        final int totalSamples = (durationMs * sampleRate) / 1000;
         final int fadeSamples = Math.max(1, (RELEASE_BEEP_FADE_MS * sampleRate) / 1000);
-        // Per-tone amplitude = volume / sqrt(2): the two DTMF tones together have the same
-        // loudness (RMS) as the former single tone at the same volume setting.
-        final double amplitude = Short.MAX_VALUE * (mReleaseBeepVolume / 100.0) / Math.sqrt(2.0);
+        // Single tone: amplitude = volume. DTMF: per-tone amplitude = volume / sqrt(2), so the
+        // two tones together have the same loudness (RMS) as the single tone.
+        final double fullAmplitude = Short.MAX_VALUE * (mReleaseBeepVolume / 100.0);
+        final double amplitude = singleTone ? fullAmplitude : fullAmplitude / Math.sqrt(2.0);
 
         short[] frame = new short[frameSize];
         int sampleIndex = 0;
@@ -571,9 +595,15 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
                 } else if (sampleIndex > totalSamples - fadeSamples) {
                     envelope = (double) (totalSamples - sampleIndex) / fadeSamples;
                 }
-                // DTMF "0": equal-level sum of both tones.
-                double sample = Math.sin(2.0 * Math.PI * RELEASE_BEEP_DTMF_LOW_HZ * t)
-                        + Math.sin(2.0 * Math.PI * RELEASE_BEEP_DTMF_HIGH_HZ * t);
+                double sample;
+                if (singleTone) {
+                    // Single 600 Hz tone.
+                    sample = Math.sin(2.0 * Math.PI * RELEASE_BEEP_SINGLE_TONE_HZ * t);
+                } else {
+                    // DTMF "0": equal-level sum of both tones.
+                    sample = Math.sin(2.0 * Math.PI * RELEASE_BEEP_DTMF_LOW_HZ * t)
+                            + Math.sin(2.0 * Math.PI * RELEASE_BEEP_DTMF_HIGH_HZ * t);
+                }
                 long v = Math.round(sample * amplitude * envelope);
                 // Hard limit only matters for volume settings above ~70%.
                 frame[i] = (short) Math.max(Short.MIN_VALUE, Math.min(Short.MAX_VALUE, v));
@@ -646,6 +676,7 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
         private String mEchoCancellationMethod;
         private boolean mReleaseBeepEnabled = true;
         private int mReleaseBeepVolume = RELEASE_BEEP_VOLUME_DEFAULT;
+        private String mReleaseBeepSound = RELEASE_BEEP_SOUND_DTMF;
         private IInputMode mInputMode;
         private AudioEncodeListener mEncodeListener;
         private AudioOutput.AudioOutputListener mTalkingListener;
@@ -720,6 +751,15 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
             return this;
         }
 
+        /**
+         * @param releaseBeepSound {@link #RELEASE_BEEP_SOUND_DTMF} or
+         *                         {@link #RELEASE_BEEP_SOUND_SINGLE_TONE}.
+         */
+        public Builder setReleaseBeepSound(String releaseBeepSound) {
+            mReleaseBeepSound = releaseBeepSound;
+            return this;
+        }
+
         public Builder setEncodeListener(AudioEncodeListener encodeListener) {
             mEncodeListener = encodeListener;
             return this;
@@ -744,7 +784,7 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
                     mInputSampleRate, mTargetBitrate, mTargetFramesPerPacket, mInputMode, targetId,
                     mAmplitudeBoost, mBluetoothEnabled, mHalfDuplexEnabled,
                     mPreprocessorEnabled, mEchoCancellationMethod, mReleaseBeepEnabled, mReleaseBeepVolume,
-                    mEncodeListener, mTalkingListener);
+                    mReleaseBeepSound, mEncodeListener, mTalkingListener);
             handler.initialize(self, maxBandwidth, codec);
             return handler;
         }
