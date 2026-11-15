@@ -25,6 +25,7 @@ import android.util.Log;
 import se.lublin.humla.R;
 import se.lublin.humla.audio.AudioInput;
 import se.lublin.humla.audio.AudioOutput;
+import se.lublin.humla.audio.MicGate;
 import se.lublin.humla.audio.encoder.CELT11Encoder;
 import se.lublin.humla.audio.encoder.CELT7Encoder;
 import se.lublin.humla.audio.encoder.IEncoder;
@@ -500,6 +501,12 @@ public class AudioHandler extends HumlaNetworkListener implements AudioInput.Aud
                     }
                 }
             }
+        }
+
+        if (talking && MicGate.isClosed()) {
+            // IW2DPO: mic gate closed (local PTT beep in progress): transmit silence
+            // instead of the microphone, so the beep is not sent to the channel.
+            java.util.Arrays.fill(frame, 0, frameSize, (short) 0);
         }
 
         if (talking) {
