@@ -81,7 +81,6 @@ android {
         testApplicationId "se.lublin.humla.test"
         testInstrumentationRunner "android.test.InstrumentationTestRunner"
         minSdkVersion 21
-        targetSdk 36
 
 //        ndk {
 //            abiFilters "armeabi", "armeabi-v7a", "x86"
@@ -110,5 +109,9 @@ android {
         explainIssues = true
         ignoreWarnings = false
         quiet = false
+        targetSdk 36
+    }
+    testOptions {
+        targetSdk 36
     }
 }
