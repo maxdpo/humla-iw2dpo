@@ -1,0 +1,16 @@
+lib/arm64-v8a/libjnicelt11.so->Project
+lib/arm64-v8a/libjnicelt7.so->Project
+lib/arm64-v8a/libjniopus.so->Project
+lib/arm64-v8a/libjnispeex.so->Project
+lib/armeabi-v7a/libjnicelt11.so->Project
+lib/armeabi-v7a/libjnicelt7.so->Project
+lib/armeabi-v7a/libjniopus.so->Project
+lib/armeabi-v7a/libjnispeex.so->Project
+lib/x86/libjnicelt11.so->Project
+lib/x86/libjnicelt7.so->Project
+lib/x86/libjniopus.so->Project
+lib/x86/libjnispeex.so->Project
+lib/x86_64/libjnicelt11.so->Project
+lib/x86_64/libjnicelt7.so->Project
+lib/x86_64/libjniopus.so->Project
+lib/x86_64/libjnispeex.so->Project
